@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Diagnostics;
 
 namespace ffxivlogparse
 {
@@ -45,7 +46,9 @@ namespace ffxivlogparse
 
         private static void Help()
         {
-            Console.WriteLine("FFXIV log parse and viewer");
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            Console.WriteLine($"FFXIV log parse and viewer {version}");
+            Console.WriteLine();
             Console.WriteLine("Usage:");
             Console.WriteLine("  ff14logview [-v] <filename>        Parse one logfile of ffxiv");
             Console.WriteLine("  ff14logview [-v] <directory name>  Parse all logfiles of ffxiv log dir.");
@@ -55,7 +58,7 @@ namespace ffxivlogparse
 
         private static void AnalyzeFF14LogFile(string filename, bool debug = false)
         {
-            Console.WriteLine(filename);
+            //Console.WriteLine(filename);
 
             using (var f = File.OpenRead(filename))
             using (var b = new BinaryReader(f))
@@ -119,8 +122,9 @@ namespace ffxivlogparse
             if (rawData == null || rawData.Length == 0)
                 return string.Empty;
 
-            //Debug character for FF14's specific symbols.
-            const byte ALT_SYMBOL = (byte)'*';
+            const byte SYMBOL = (byte)'*'; // The letter to replace FF14's specific symbols.
+            const byte ATMARK = (byte)'@'; // The letter to replace [02-12-02-59-03]
+            const byte SPACE = (byte)' ';  // The letter to replace 0x1f
 
             var len = rawData.Length;
             var outBuf = new List<byte>();
@@ -139,22 +143,34 @@ namespace ffxivlogparse
                     // FFXIV binary message part.
                     // This part will be skipped as un-readable.
                     // Data format:
-                    //   c1 = 0x02
-                    //   c2 = opcode(0x12,0x13,0x27,0x2e)
-                    //   c3 = length of data.
-                    //   data: this seems to always end with 0x03.
+                    //   c1   (1 byte)   : 0x02 (fixed)
+                    //   c2   (1 byte)   : opcode(This seems to be : 0x12, 0x13, 0x27, 0x2e)
+                    //   c3   (1 byte)   : length of data.
+                    //   data (c3 bytes) : this seems to always end with 0x03.
 
-                    var startPos = i;
+                    var skipdata = rawData.Skip(i).Take(c3 + 3).ToArray(); // 3 = bytes of (c1 + c2 + c3)
 
-                    //skip this part.
-                    i += c3 + 2;
-
-                    if (debug)
+                    if (skipdata.CompareBinary(0x02, 0x12, 0x02, 0x59, 0x03))
                     {
-                        var skipdata = rawData.Skip(startPos).Take(c3).ToArray();
-                        outBuf.AddRange($"[{BitConverter.ToString(skipdata)}]".Select(c => (byte)c));
-                        System.Diagnostics.Debug.WriteLine(BitConverter.ToString(skipdata));
+                        //Delimiter between player name and server name
+                        outBuf.Add(ATMARK);
                     }
+                    else if (debug)
+                    {
+                        //var skipdata = rawData.Skip(i).Take(c3 + 3).ToArray();
+                        outBuf.AddRange($"[{BitConverter.ToString(skipdata)}]".Select(c => (byte)c));
+                        Debug.WriteLine(BitConverter.ToString(skipdata));
+                    }
+
+                    // skip this part.
+                    // skip length = c3 + 1byte(c2) + 1byte(c3).
+                    // The c1(1byte) should be automatically incremented by "for" statement
+                    i += c3 + 2;
+                }
+                else if (c1 == 0x1f)
+                {
+                    //delimiter
+                    outBuf.Add(SPACE);
                 }
                 else if (c1 >= 0x20 && c1 < 0x7f)
                 {
@@ -179,7 +195,7 @@ namespace ffxivlogparse
                     {
                         if (debug)
                         {
-                            outBuf.Add(ALT_SYMBOL);
+                            outBuf.Add(SYMBOL);
                         }
                         i += 2;
                     }
@@ -215,6 +231,10 @@ namespace ffxivlogparse
                     //   c1 == 0x7f (DEL)
                     //   c1 is >=0x80 and <=0xbf(utf8 2nd char)
                     //   c1 > 0xf4 (out of utf-8 range)
+                    if (debug)
+                    {
+                        outBuf.AddRange($"<{c1:x2}>".Select(c => (byte)c));
+                    }
                 }
             }
 
@@ -222,6 +242,17 @@ namespace ffxivlogparse
 
             //Check if it is the 2nd or subsequent byte of UTF-8 characters.
             bool u8char2(byte c) => c >= 0x80 && c <= 0xbf;
+        }
+
+        private static bool CompareBinary(this byte[] x, params byte[] y)
+        {
+            if (x.Length != y.Length) return false;
+            for (int i = 0; i < x.Length; i++)
+            {
+                if (x[i] != y[i])
+                    return false;
+            }
+            return true;
         }
     }
 }
